@@ -1,0 +1,73 @@
+name: Custom Android Build
+
+on:
+  workflow_dispatch: # Allows you to click a button to start
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git git-svn python3 python3-pip ninja-build libgtk-3-dev
+          pip3 install wheel
+          pip3 install .
+
+      - name: Setup Tools & Engine
+        run: |
+          # 1. Setup Depot Tools
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          export PATH=$PATH:$PWD/depot_tools
+          
+          # 2. Setup Engine
+          git clone https://github.com/flutter/flutter.git engine
+          cd engine
+          git config --global user.email "bot@example.com"
+          git config --global user.name "bot"
+          
+          # 3. Checkout specific commit (Your Hash)
+          git fetch origin 38fddb289f1863e257f4b5b5c9323061344dcc54
+          git reset --hard 38fddb289f1863e257f4b5b5c9323061344dcc54
+          
+          # 4. Patch
+          cd ..
+          reflutter -b e778b1230a9836052e2161a8a766cccc -p
+          
+          # 5. Sync Dependencies (This takes time)
+          cd engine
+          echo 'solutions = [{"managed": False,"name": ".","url": "'$PWD'","custom_deps": {},"deps_file": "DEPS","safesync_url": "",},]' > .gclient
+          gclient sync
+          
+          # 6. Patch again to be sure
+          cd ..
+          reflutter -b e778b1230a9836052e2161a8a766cccc -p
+
+      - name: Build Android ARM64
+        run: |
+          export PATH=$PATH:$PWD/depot_tools
+          cd engine/src/flutter/tools
+          
+          # Configure and Build
+          ./gn --no-goma --android --android-cpu=arm64 --runtime-mode=release
+          ninja -C ../../out/android_release_arm64
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libflutter_arm64
+          path: engine/src/out/android_release_arm64/lib.stripped/libflutter.so
