@@ -36,7 +36,6 @@ jobs:
           export DEPOT_TOOLS_METRICS=0
           
           # 2. Setup Source Cache (engine)
-          # We clone to 'engine_cache' first to apply the patch
           git clone https://github.com/flutter/flutter.git engine_cache
           cd engine_cache
           git config --global user.email "bot@example.com"
@@ -48,51 +47,34 @@ jobs:
           
           # 4. Patch the cache
           cd ..
-          # Patch the repo in 'engine_cache'
-          # reflutter expects to find 'engine' or we point it?
-          # reflutter usually runs in the dir containing 'engine'. 
-          # Let's rename engine_cache to engine temporarily for reflutter patch
           mv engine_cache engine
           reflutter -b e778b1230a9836052e2161a8a766cccc -p
           
           # 5. Prepare Build Environment
-          # We create a clean directory 'build_root' to hold the gclient setup
           mkdir build_root
           cd build_root
           
-          # We tell gclient to check out 'src/flutter' using our local 'engine' repo as the source
           echo 'solutions = [{"managed": False,"name": "src/flutter","url": "'$GITHUB_WORKSPACE/engine'","custom_deps": {},"deps_file": "DEPS","safesync_url": "",},]' > .gclient
           
-          # Sync! This puts the repo into build_root/src/flutter and fetches all deps
           gclient sync --verbose --no-history
-          
-          # 6. Apply patch again to the build directory (reflutter logic often requires this)
-          # The reflutter tool looks for 'engine' in current dir? 
-          # We need to apply the patch to 'build_root/src/flutter'.
-          # We can trick reflutter or just copy the patched files if we knew them.
-          # Easier: Run reflutter patch again if it supports it.
-          # reflutter assumes standard layout often.
-          
-          # Let's verify where reflutter applies patch. It usually looks for 'engine/src/flutter' or just 'src/flutter'?
-          # If we run reflutter -p here (in build_root), it might expect 'engine' subdir.
-          # But we have 'src/flutter'.
-          
-          # Manual fallback: The 'gclient sync' might overwrite our patched files in 'src/flutter' if it re-clones.
-          # But since URL is local, it should clone the *patched* commit.
-          # However, 'reflutter -p' modifies files. 
-          # Let's rely on the fact that we patched the source 'engine', and gclient clones from it.
-          # So 'src/flutter' should already contain the patch!
 
       - name: Build Android ARM64
         run: |
           export PATH=$PATH:$PWD/depot_tools
+          # We are in the root of the repo
+          # The sync created 'build_root/src'
+          
           cd build_root/src/flutter/tools
           
           # Configure
           ./gn --no-goma --android --android-cpu=arm64 --runtime-mode=release
           
+          # The GN tool generates output in: build_root/src/out/android_release_arm64
+          # But we are currently in:        build_root/src/flutter/tools
+          # So relative path to out is:     ../../out/android_release_arm64
+          
           # Build
-          ninja -C ../../../out/android_release_arm64
+          ninja -C ../../out/android_release_arm64
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
