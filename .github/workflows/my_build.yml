@@ -1,7 +1,7 @@
 name: Custom Android Build
 
 on:
-  workflow_dispatch: # Allows you to click a button to start
+  workflow_dispatch:
 
 jobs:
   build-android:
@@ -33,12 +33,12 @@ jobs:
           # 1. Setup Depot Tools
           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
           export PATH=$PATH:$PWD/depot_tools
-          # Turn off metrics to avoid the warning/hang
-          export DEPOT_TOOLS_METRICS=0 
+          export DEPOT_TOOLS_METRICS=0
           
-          # 2. Setup Engine
-          git clone https://github.com/flutter/flutter.git engine
-          cd engine
+          # 2. Setup Source Cache (engine)
+          # We clone to 'engine_cache' first to apply the patch
+          git clone https://github.com/flutter/flutter.git engine_cache
+          cd engine_cache
           git config --global user.email "bot@example.com"
           git config --global user.name "bot"
           
@@ -46,34 +46,56 @@ jobs:
           git fetch origin 38fddb289f1863e257f4b5b5c9323061344dcc54
           git reset --hard 38fddb289f1863e257f4b5b5c9323061344dcc54
           
-          # 4. Patch
+          # 4. Patch the cache
           cd ..
+          # Patch the repo in 'engine_cache'
+          # reflutter expects to find 'engine' or we point it?
+          # reflutter usually runs in the dir containing 'engine'. 
+          # Let's rename engine_cache to engine temporarily for reflutter patch
+          mv engine_cache engine
           reflutter -b e778b1230a9836052e2161a8a766cccc -p
           
-          # 5. Sync Dependencies
-          cd engine
-          # Create a minimal .gclient to fetch ONLY what we need
-          echo 'solutions = [{"managed": False,"name": ".","url": "'$PWD'","custom_deps": {},"deps_file": "DEPS","safesync_url": "",},]' > .gclient
+          # 5. Prepare Build Environment
+          # We create a clean directory 'build_root' to hold the gclient setup
+          mkdir build_root
+          cd build_root
           
-          # Use --verbose to see what is happening if it hangs
-          # Use --no-history to save space/time
+          # We tell gclient to check out 'src/flutter' using our local 'engine' repo as the source
+          echo 'solutions = [{"managed": False,"name": "src/flutter","url": "'$GITHUB_WORKSPACE/engine'","custom_deps": {},"deps_file": "DEPS","safesync_url": "",},]' > .gclient
+          
+          # Sync! This puts the repo into build_root/src/flutter and fetches all deps
           gclient sync --verbose --no-history
           
-          # 6. Patch again
-          cd ..
-          reflutter -b e778b1230a9836052e2161a8a766cccc -p
+          # 6. Apply patch again to the build directory (reflutter logic often requires this)
+          # The reflutter tool looks for 'engine' in current dir? 
+          # We need to apply the patch to 'build_root/src/flutter'.
+          # We can trick reflutter or just copy the patched files if we knew them.
+          # Easier: Run reflutter patch again if it supports it.
+          # reflutter assumes standard layout often.
+          
+          # Let's verify where reflutter applies patch. It usually looks for 'engine/src/flutter' or just 'src/flutter'?
+          # If we run reflutter -p here (in build_root), it might expect 'engine' subdir.
+          # But we have 'src/flutter'.
+          
+          # Manual fallback: The 'gclient sync' might overwrite our patched files in 'src/flutter' if it re-clones.
+          # But since URL is local, it should clone the *patched* commit.
+          # However, 'reflutter -p' modifies files. 
+          # Let's rely on the fact that we patched the source 'engine', and gclient clones from it.
+          # So 'src/flutter' should already contain the patch!
 
       - name: Build Android ARM64
         run: |
           export PATH=$PATH:$PWD/depot_tools
-          cd engine/src/flutter/tools
+          cd build_root/src/flutter/tools
           
-          # Configure and Build
+          # Configure
           ./gn --no-goma --android --android-cpu=arm64 --runtime-mode=release
-          ninja -C ../../out/android_release_arm64
+          
+          # Build
+          ninja -C ../../../out/android_release_arm64
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: libflutter_arm64
-          path: engine/src/out/android_release_arm64/lib.stripped/libflutter.so
+          path: build_root/src/out/android_release_arm64/lib.stripped/libflutter.so
